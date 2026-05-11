@@ -9,31 +9,26 @@ const loadedFonts = new Set();
 function loadFont(key) {
   if (!FONT_URLS[key] || loadedFonts.has(key)) return;
   loadedFonts.add(key);
-  const link   = document.createElement('link');
-  link.rel     = 'stylesheet';
-  link.href    = FONT_URLS[key];
+  const link = document.createElement('link');
+  link.rel   = 'stylesheet';
+  link.href  = FONT_URLS[key];
   document.head.appendChild(link);
-}
-
-function setsEqual(a, b) {
-  if (a.size !== b.size) return false;
-  for (const v of a) if (!b.has(v)) return false;
-  return true;
 }
 
 class TextClockCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    this._config       = null;
-    this._activeCells  = new Set();
-    this._activeKey    = '';
-    this._effectMgr    = null;
-    this._mainTimer    = null;
-    this._secondTimer  = null;
-    this._resizeObs    = null;
-    this._wrapper      = null;
-    this._grid         = null;
+    this._config      = null;
+    this._activeCells = new Set();
+    this._activeKey   = '';
+    this._effectMgr   = null;
+    this._mainTimer   = null;
+    this._secondTimer = null;
+    this._resizeObs   = null;
+    this._wrapper     = null;
+    this._grid        = null;
+    this._ready       = false; // true once DOM is built and first update run
   }
 
   // ── HA interface ──────────────────────────────────────────────────────────
@@ -47,12 +42,17 @@ class TextClockCard extends HTMLElement {
       ? (COLOR_THEMES[config.color_theme] || {})
       : {};
     this._config = { ...DEFAULT_CONFIG, ...theme, ...config };
+    this._ready  = false;
 
     if (this.isConnected) this._reset();
   }
 
-  // hass setter is required by the HA interface but this card doesn't use entity data.
-  set hass(_) {}
+  // HA calls set hass on every state update — use it as a guaranteed first-paint trigger.
+  set hass(_) {
+    if (!this._ready && this._config && this.isConnected) {
+      this._reset();
+    }
+  }
 
   getCardSize() { return 4; }
 
@@ -75,7 +75,15 @@ class TextClockCard extends HTMLElement {
   _reset() {
     this._teardown();
     this._buildDOM();
+    // Synchronous first paint of active cells
     this._update();
+    this._ready = true;
+    // Deferred recalc after browser has measured layout
+    requestAnimationFrame(() => {
+      this._recalcFontSize();
+      // Second pass in case first RAF fired before layout was stable
+      requestAnimationFrame(() => this._recalcFontSize());
+    });
     this._startTimers();
     this._startResizeObserver();
   }
@@ -99,7 +107,6 @@ class TextClockCard extends HTMLElement {
 
     loadFont(cfg.font_family);
 
-    // Grid rows
     let gridHTML = '';
     for (let r = 0; r < ROWS; r++) {
       gridHTML += '<div class="tc-row">';
@@ -109,21 +116,20 @@ class TextClockCard extends HTMLElement {
       gridHTML += '</div>';
     }
 
-    // Corner dots
-    const dots = '<div class="dot tl"></div><div class="dot tr"></div><div class="dot bl"></div><div class="dot br"></div>';
-
-    // Matrix canvas only injected when needed (avoids unused DOM)
+    const dots   = '<div class="dot tl"></div><div class="dot tr"></div><div class="dot bl"></div><div class="dot br"></div>';
     const canvas = cfg.effect_mode === 'matrix' ? '<canvas class="matrix-canvas"></canvas>' : '';
 
+    // Use a plain div instead of ha-card so CSS variables and styles are not
+    // subject to ha-card's shadow boundary slot quirks.
     shadow.innerHTML = `
       <style>${this._css()}</style>
-      <ha-card>
+      <div class="tc-card">
         <div class="tc-wrap">
           ${canvas}
           <div class="tc-grid">${gridHTML}</div>
           ${dots}
         </div>
-      </ha-card>
+      </div>
     `;
 
     this._wrapper = shadow.querySelector('.tc-wrap');
@@ -133,34 +139,40 @@ class TextClockCard extends HTMLElement {
   }
 
   _css() {
-    const c   = this._config;
-    const gr  = Math.round(c.effect_intensity * 22);
+    const c    = this._config;
+    const gr   = Math.round(c.effect_intensity * 22);
     const tdur = c.transition_duration;
-    const ff  = FONT_FAMILIES[c.font_family] || 'monospace';
-    const dotShow = c.second_dot_mode === 'corners' ? '1' : '0';
-    const pw  = Math.round(c.padding / 2);
+    const ff   = FONT_FAMILIES[c.font_family] || 'monospace';
+    const pw   = Math.round(c.padding / 2);
+    const dotOp = c.second_dot_mode === 'corners' ? '1' : '0';
+
+    // Use literal colour values — avoids CSS variable inheritance issues
+    // across shadow boundaries when card is slotted inside other elements.
+    const glowCSS = c.effect_mode === 'glow' ? `
+      .cell.active {
+        text-shadow:
+          0 0 ${gr}px ${c.active_color},
+          0 0 ${gr * 2}px ${c.active_color};
+      }` : '';
 
     return `
       :host {
         display: block;
-        --tc-active:   ${c.active_color};
-        --tc-inactive: ${c.inactive_color};
-        --tc-bg:       ${c.background_color};
-        --tc-opacity:  ${c.inactive_opacity};
-        --tc-glow:     ${gr}px;
-        --tc-tdur:     ${tdur}ms;
       }
-      ha-card {
-        background: var(--tc-bg);
-        overflow: hidden;
-        height: 100%;
+      .tc-card {
+        background: ${c.background_color};
         border-radius: var(--ha-card-border-radius, 12px);
+        box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0,0,0,0.4));
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        min-height: 200px;
+        box-sizing: border-box;
       }
       .tc-wrap {
         position: relative;
         width: 100%;
         height: 100%;
-        min-height: 180px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -179,42 +191,42 @@ class TextClockCard extends HTMLElement {
         position: relative;
         z-index: 1;
         user-select: none;
+        flex-shrink: 0;
       }
       .tc-row {
         display: flex;
+        white-space: nowrap;
       }
       .cell {
         display: inline-block;
         min-width: ${c.letter_spacing}ch;
         text-align: center;
-        color: var(--tc-inactive);
-        opacity: var(--tc-opacity);
-        transition: color var(--tc-tdur) ease, opacity var(--tc-tdur) ease, text-shadow var(--tc-tdur) ease;
+        color: ${c.inactive_color};
+        opacity: ${c.inactive_opacity};
+        transition:
+          color ${tdur}ms ease,
+          opacity ${tdur}ms ease,
+          text-shadow ${tdur}ms ease;
         cursor: default;
       }
       .cell.active {
-        color: var(--tc-active);
+        color: ${c.active_color};
         opacity: 1;
       }
-      ${c.effect_mode === 'glow' ? `
-      .cell.active {
-        text-shadow:
-          0 0 var(--tc-glow) var(--tc-active),
-          0 0 calc(var(--tc-glow) * 2) var(--tc-active);
-      }` : ''}
+      ${glowCSS}
       .dot {
         position: absolute;
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: var(--tc-active);
-        opacity: ${dotShow};
+        background: ${c.active_color};
+        opacity: ${dotOp};
         transition: opacity 0.4s;
       }
-      .dot.tl { top: ${pw}px;  left: ${pw}px;  }
-      .dot.tr { top: ${pw}px;  right: ${pw}px; }
-      .dot.bl { bottom: ${pw}px; left: ${pw}px;  }
-      .dot.br { bottom: ${pw}px; right: ${pw}px; }
+      .dot.tl { top: ${pw}px;    left: ${pw}px;   }
+      .dot.tr { top: ${pw}px;    right: ${pw}px;  }
+      .dot.bl { bottom: ${pw}px; left: ${pw}px;   }
+      .dot.br { bottom: ${pw}px; right: ${pw}px;  }
       .matrix-canvas {
         position: absolute;
         inset: 0;
@@ -246,7 +258,7 @@ class TextClockCard extends HTMLElement {
     const key   = cellSetKey(cells);
 
     if (key !== this._activeKey) {
-      const prev       = this._activeCells;
+      const prev        = this._activeCells;
       this._activeCells = cells;
       this._activeKey   = key;
       this._applyActiveCells(cells, prev);
@@ -256,30 +268,24 @@ class TextClockCard extends HTMLElement {
   }
 
   _applyActiveCells(newCells, prevCells) {
-    const mode = this._config.effect_mode;
-
-    // pixel_reveal and typewriter transitions are handled by EffectManager.
-    // For those modes we still need to set the .active class, but let the
-    // effect manager drive timing.
+    const mode      = this._config.effect_mode;
     const delegated = mode === 'pixel_reveal' || mode === 'typewriter';
 
     if (!delegated) {
       this.shadowRoot.querySelectorAll('.cell').forEach(cell => {
-        cell.classList.toggle('active', newCells.has(cell.dataset.pos));
-        // Aurora / ambient_drift clear inline color so CSS var takes over
+        const active = newCells.has(cell.dataset.pos);
+        cell.classList.toggle('active', active);
+
+        // Clear any inline colour left by aurora / ambient_drift so the
+        // stylesheet rule (literal colour values) takes over cleanly.
         if (mode !== 'aurora') {
-          cell.style.color = '';
+          cell.style.color      = '';
           cell.style.textShadow = '';
         }
       });
     }
 
-    // Notify effect manager — it handles pixel_reveal and typewriter animations.
     if (this._effectMgr) this._effectMgr.onTransition(newCells, prevCells);
-
-    // After applying classes, re-calc font size (cell count didn't change but
-    // active state may affect bounding box in some fonts).
-    requestAnimationFrame(() => this._recalcFontSize());
   }
 
   _updateDots(secs) {
@@ -293,9 +299,9 @@ class TextClockCard extends HTMLElement {
       const op = (0.35 + 0.65 * Math.abs(Math.sin(secs * Math.PI))).toFixed(3);
       dots.forEach(d => { d.style.opacity = op; });
     } else if (mode === 'sweep') {
-      const order = ['tl', 'tr', 'br', 'bl'];
+      const order  = ['tl', 'tr', 'br', 'bl'];
       const active = Math.floor(secs / 15) % 4;
-      dots.forEach(d  => { d.style.opacity = '0.15'; });
+      dots.forEach(d => { d.style.opacity = '0.15'; });
       const sel = this.shadowRoot.querySelector(`.dot.${order[active]}`);
       if (sel) sel.style.opacity = '1';
     }
@@ -323,25 +329,35 @@ class TextClockCard extends HTMLElement {
   }
 
   _recalcFontSize() {
-    const cfg = this._config;
-    if (cfg.font_size_mode !== 'auto') return;
+    if (!this._config || this._config.font_size_mode !== 'auto') return;
 
     const wrap = this._wrapper;
     const grid = this._grid;
     if (!wrap || !grid) return;
 
-    const availW = wrap.clientWidth  - cfg.padding * 2;
-    const availH = wrap.clientHeight - cfg.padding * 2;
-    if (availW <= 0 || availH <= 0) return;
+    const pad    = this._config.padding;
+    const availW = wrap.clientWidth  - pad * 2;
+    const availH = wrap.clientHeight - pad * 2;
+    if (availW <= 10 || availH <= 10) return;
 
-    const curFS  = parseFloat(grid.style.fontSize) || 20;
-    const gridW  = grid.scrollWidth;
-    const gridH  = grid.scrollHeight;
-    if (gridW <= 0 || gridH <= 0) return;
+    const curFS = parseFloat(grid.style.fontSize) || 20;
 
-    // Scale from current rendered dimensions to available space.
-    const scale  = Math.min(availW / gridW, availH / gridH);
-    const newFS  = Math.max(6, Math.min(300, Math.floor(curFS * scale)));
+    // Temporarily hide overflow so scrollWidth/Height reflect natural size.
+    // Use getBoundingClientRect on a sample cell for a more accurate ratio.
+    const sample = grid.querySelector('.tc-row');
+    if (!sample) return;
+
+    const rowW  = sample.scrollWidth;  // natural width of one row at curFS
+    const rowH  = sample.offsetHeight; // natural height of one row at curFS
+
+    if (rowW <= 0 || rowH <= 0) return;
+
+    const scaleW = availW / rowW;
+    const scaleH = availH / (rowH * ROWS);
+
+    // Apply a safety factor so the grid never clips the wrapper.
+    const scale = Math.min(scaleW, scaleH) * 0.97;
+    const newFS = Math.max(6, Math.min(300, Math.floor(curFS * scale)));
 
     if (Math.abs(newFS - curFS) >= 1) {
       grid.style.fontSize = `${newFS}px`;
@@ -353,9 +369,9 @@ customElements.define('text-clock-card', TextClockCard);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type:        'text-clock-card',
-  name:        'Text Clock Card',
-  description: 'A beautiful word clock card for Home Assistant',
-  preview:     true,
+  type:             'text-clock-card',
+  name:             'Text Clock Card',
+  description:      'A beautiful word clock card for Home Assistant',
+  preview:          true,
   documentationURL: 'https://github.com/squizzer73/text_clock',
 });
