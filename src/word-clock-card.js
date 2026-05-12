@@ -56,7 +56,7 @@ class TextClockCard extends HTMLElement {
 
   getCardSize() { return 4; }
 
-  getConfigElement() {
+  static getConfigElement() {
     return document.createElement('text-clock-card-editor');
   }
 
