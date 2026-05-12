@@ -650,6 +650,9 @@ class TextClockCard extends HTMLElement {
     return `
       :host {
         display: block;
+        /* Default square aspect so height is always defined without needing
+           a parent height. Users can override in card CSS or HA layout. */
+        aspect-ratio: 1 / 1;
       }
       .tc-card {
         background: ${c.background_color};
@@ -658,7 +661,6 @@ class TextClockCard extends HTMLElement {
         overflow: hidden;
         width: 100%;
         height: 100%;
-        min-height: 200px;
         box-sizing: border-box;
       }
       .tc-wrap {
@@ -815,39 +817,38 @@ class TextClockCard extends HTMLElement {
   // ── auto font size ────────────────────────────────────────────────────────
 
   _startResizeObserver() {
-    if (!this._wrapper) return;
+    // Observe the host element — HA always assigns it a width via the grid
+    // layout, and with aspect-ratio:1 the height is derived from that width.
     this._resizeObs = new ResizeObserver(() => this._recalcFontSize());
-    this._resizeObs.observe(this._wrapper);
+    this._resizeObs.observe(this);
   }
 
   _recalcFontSize() {
     if (!this._config || this._config.font_size_mode !== 'auto') return;
 
-    const wrap = this._wrapper;
     const grid = this._grid;
-    if (!wrap || !grid) return;
+    if (!grid) return;
 
     const pad    = this._config.padding;
-    const availW = wrap.clientWidth  - pad * 2;
-    const availH = wrap.clientHeight - pad * 2;
+    // Use the host element's dimensions — they are always well-defined because
+    // HA provides a width and aspect-ratio:1 gives a matching height.
+    const availW = this.clientWidth  - pad * 2;
+    const availH = this.clientHeight - pad * 2;
     if (availW <= 10 || availH <= 10) return;
 
     const curFS = parseFloat(grid.style.fontSize) || 20;
 
-    // Temporarily hide overflow so scrollWidth/Height reflect natural size.
-    // Use getBoundingClientRect on a sample cell for a more accurate ratio.
     const sample = grid.querySelector('.tc-row');
     if (!sample) return;
 
-    const rowW  = sample.scrollWidth;  // natural width of one row at curFS
-    const rowH  = sample.offsetHeight; // natural height of one row at curFS
-
+    const rowW = sample.scrollWidth;   // natural width of one row at curFS
+    const rowH = sample.offsetHeight;  // natural height of one row at curFS
     if (rowW <= 0 || rowH <= 0) return;
 
     const scaleW = availW / rowW;
     const scaleH = availH / (rowH * ROWS);
 
-    // Apply a safety factor so the grid never clips the wrapper.
+    // 0.97 safety margin prevents single-pixel overflow clipping.
     const scale = Math.min(scaleW, scaleH) * 0.97;
     const newFS = Math.max(6, Math.min(300, Math.floor(curFS * scale)));
 
