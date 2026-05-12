@@ -6,6 +6,7 @@ export const DEFAULT_CONFIG = {
   letter_spacing: 1.2,
   inactive_opacity: 0.15,
   padding: 16,
+  aspect_ratio: '1/1',
   font_size_mode: 'auto',
   font_size_fixed: 24,
   effect_mode: 'glow',

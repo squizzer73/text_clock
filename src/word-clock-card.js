@@ -158,9 +158,7 @@ class TextClockCard extends HTMLElement {
     return `
       :host {
         display: block;
-        /* Default square aspect so height is always defined without needing
-           a parent height. Users can override in card CSS or HA layout. */
-        aspect-ratio: 1 / 1;
+        ${c.aspect_ratio !== 'fill' ? `aspect-ratio: ${c.aspect_ratio};` : ''}
       }
       .tc-card {
         background: ${c.background_color};
