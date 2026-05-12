@@ -372,5 +372,6 @@ window.customCards.push({
   name:             'Text Clock Card',
   description:      'A beautiful word clock card for Home Assistant',
   preview:          true,
+  configurable:     true,
   documentationURL: 'https://github.com/squizzer73/text_clock',
 });
