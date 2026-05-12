@@ -706,7 +706,7 @@ class TextClockCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    this._config      = null;
+    this._config      = { ...DEFAULT_CONFIG };
     this._activeCells = new Set();
     this._activeKey   = '';
     this._effectMgr   = null;
@@ -750,7 +750,7 @@ class TextClockCard extends HTMLElement {
   // ── lifecycle ─────────────────────────────────────────────────────────────
 
   connectedCallback() {
-    if (this._config) this._reset();
+    this._reset();
   }
 
   disconnectedCallback() {
