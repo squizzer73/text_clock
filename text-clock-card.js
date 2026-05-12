@@ -584,7 +584,7 @@ class TextClockCardEditor extends HTMLElement {
   }
 
   _rng(key, label, min, max, step, hint = '') {
-    const v = this._config[key] ?? 1;
+    const v = this._config[key] ?? DEFAULT_CONFIG[key] ?? 1;
     return `
       <div class="row">
         <div class="label-col">
